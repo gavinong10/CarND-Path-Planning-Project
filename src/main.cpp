@@ -161,6 +161,29 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s,
   return {x, y};
 }
 
+const double MAX_VELOCITY = 49.;
+const double MAX_ACCEL = .224;
+const int LEFT_LANE_L = 0;
+const int LEFT_LANE_R = 4;
+const int CENTER_LANE_R = 4;
+const int CENTER_LANE_L = 8;
+const int RIGHT_LANE_L = 8;
+const int RIGHT_LANE_R = 12;
+
+int d_to_lane(double d) {
+  int lane;
+  if (d > CENTER_LANE_R && d < CENTER_LANE_L) {
+    lane = 1;
+  } else if (d > LEFT_LANE_L && d < LEFT_LANE_R) {
+    lane = 0;
+  } else if (d > RIGHT_LANE_L && d < RIGHT_LANE_R) {
+    lane = 2;
+  } else {
+    lane = -1; //invalid or unknown
+  }
+  return lane;
+}
+
 int main() {
   uWS::Hub h;
 
@@ -198,17 +221,15 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
 
-  // start in lane 1;
+  // start in lane 1
   int lane = 1;
 
   // Have a reference velocity to target
-  double ref_vel = 0; // mph
+  double rev_vel = 0.0; //mph
 
   h.onMessage([&map_waypoints_x, &map_waypoints_y, &map_waypoints_s,
-               &map_waypoints_dx,
-               &map_waypoints_dy,
-							 &lane,
-							 &ref_vel](uWS::WebSocket<uWS::SERVER> ws, char *data,
+               &map_waypoints_dx, &rev_vel, &lane,
+               &map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data,
                                   size_t length, uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -216,20 +237,22 @@ int main() {
     // auto sdata = string(data).substr(0, length);
     // cout << sdata << endl;
 
-    /* FSM notes 
+    /* FSM notes
 
-    For lane changes, might want to look at other cars in the lane we want to move into.
-    Similar logic - is there a car in front or not? Check if a car is in the lane and
-    within a particular range of Frenet, s. Go left, then go right, then slow down. 
-    Don't go off the road.
+    For lane changes, might want to look at other cars in the lane we want to
+    move into. Similar logic - is there a car in front or not? Check if a car is
+    in the lane and within a particular range of Frenet, s. Go left, then go
+    right, then slow down. Don't go off the road.
 
     Implement a good FSM and cost function.
 
     Possibly integrate Naive Bayes to predict where other cars are going to go.
 
-    Minimum set of concepts: frenet, path smoother (spline), FSM - what maneuvers.
+    Minimum set of concepts: frenet, path smoother (spline), FSM - what
+    maneuvers.
 
-    localization transformation - required because spline behavior @ vertical is undefined
+    localization transformation - required because spline behavior @ vertical is
+    undefined
     
      End FSM notes */
 
@@ -267,8 +290,11 @@ int main() {
 
           int prev_size = previous_path_x.size();
 
-          // TODO: define a path made up of (x,y) points that the car will
-          // visit sequentially every .02 seconds
+          // Find ref_v.
+        
+          bool cannot_change_lane_left = false;
+          bool cannot_change_lane_right = false;
+          double speed_diff = 0.0;
 
           if (prev_size > 0) {
             car_s = end_path_s;
@@ -276,42 +302,67 @@ int main() {
 
           bool too_close = false;
 
-          // find ref_v to use
           for (int i = 0; i < sensor_fusion.size(); i++) {
-            // car is in my lane
             float d = sensor_fusion[i][6];
-            if (d < (2 + 4 * lane + 2) && (d > (2 + 4 * lane - 2))) {
-              double vx = sensor_fusion[i][3];
-              double vy = sensor_fusion[i][4];
-              double check_speed = sqrt(vx * vx + vy * vy);
-              double check_car_s = sensor_fusion[i][5];
 
-              // if using previous points can project s value outward
-              check_car_s += ((double)prev_size * .02 * check_speed);
+            // Find car speed.
+            double vx = sensor_fusion[i][3];
+            double vy = sensor_fusion[i][4];
+            double check_speed = sqrt(vx * vx + vy * vy);
+            double check_car_s = sensor_fusion[i][5];
 
-              // check s values greater than mine and s gap
-              if ((check_car_s > car_s) && ((check_car_s - car_s) < 30)) {
+            int vehicle_in_lane = d_to_lane(d);
+            if(vehicle_in_lane == -1) {
+              continue;
+            }
 
-                // Do some logic here. lower reference
-                // velocity so we don't crash into the car in front of us, could
-                // also flag to try to change lanes.
-                // ref_vel = 29.5; // mph
-                too_close = true;
+            // if using previous points can project s value outward
+            check_car_s += ((double)prev_size * 0.02 * check_speed);
 
-                if(lane > 0) {
-                  lane = 0;
-                }
-              }
+            if (vehicle_in_lane == lane) {
+              // Car in our lane.
+
+              // We are too close if the other car, projected at its speed for
+              // as many frames as prev_size, is in front AND no more than 30 m in front.
+              too_close |= check_car_s > car_s && check_car_s - car_s < 30;
+            } else if (vehicle_in_lane - lane == -1) {
+              // If we find that the car in the left lane is
+              // within 30 m in front or behind, then we cannot change lane
+              // so set cannot_change_lane_left
+              cannot_change_lane_left |=
+                  car_s - 30 < check_car_s && car_s + 30 > check_car_s;
+            } else if (vehicle_in_lane - lane == 1) {
+              // If we find that the car in the left lane is
+              // within 30 m in front or behind, then we cannot change lane
+              // so set cannot_change_lane_right
+              cannot_change_lane_right |=
+                  car_s - 30 < check_car_s && car_s + 30 > check_car_s;
             }
           }
 
-					
           if (too_close) {
-            ref_vel -= .224;
-          } else if (ref_vel < 49.5) {
-            ref_vel += .224;
+            if (!cannot_change_lane_right && lane != 2) {
+              // If there is space to the right lane and we aren't in the right lane
+              lane++;
+            } else if (!cannot_change_lane_left && lane > 0) {
+              // If there is space to the left lane and we aren't in the left
+              // lane
+              lane--;
+            } else {
+              speed_diff -= MAX_ACCEL;
+            }
+          } else {
+            // If vehicle is not in the center lane.
+            if (lane != 1) {
+              if ((lane == 0 && !cannot_change_lane_right) ||
+                  (lane == 2 && !cannot_change_lane_left)) {
+                lane = 1;
+              }
+            }
+            if (rev_vel < MAX_VELOCITY) {
+              speed_diff += MAX_ACCEL;
+            }
           }
-					
 
           // Create a list of widely spaced (x, y) waypoints, evenly
           // spaced at 30m Later we will interpolate these waypoints with
@@ -366,14 +417,14 @@ int main() {
           // Using Frenet, add 30m evenly spaced points ahead of the starting
           // reference
           vector<double> next_wp0 =
-              getXY(car_s + 30, (2 + 4 * lane), map_waypoints_s,
-                    map_waypoints_x, map_waypoints_y);
+              getXY(car_s + 30, 2 + 4 * lane, map_waypoints_s, map_waypoints_x,
+                    map_waypoints_y);
           vector<double> next_wp1 =
-              getXY(car_s + 60, (2 + 4 * lane), map_waypoints_s,
-                    map_waypoints_x, map_waypoints_y);
+              getXY(car_s + 60, 2 + 4 * lane, map_waypoints_s, map_waypoints_x,
+                    map_waypoints_y);
           vector<double> next_wp2 =
-              getXY(car_s + 90, (2 + 4 * lane), map_waypoints_s,
-                    map_waypoints_x, map_waypoints_y);
+              getXY(car_s + 90, 2 + 4 * lane, map_waypoints_s, map_waypoints_x,
+                    map_waypoints_y);
 
           ptsx.push_back(next_wp0[0]);
           ptsx.push_back(next_wp1[0]);
@@ -403,7 +454,7 @@ int main() {
           vector<double> next_y_vals;
 
           // Start with all the previous path points from last time
-          for (int i = 0; i < previous_path_x.size(); i++) {
+          for (int i = 0; i < prev_size; i++) {
             next_x_vals.push_back(previous_path_x[i]);
             next_y_vals.push_back(previous_path_y[i]);
           }
@@ -412,16 +463,20 @@ int main() {
           // reference velocity
           double target_x = 30.0;
           double target_y = s(target_x);
-          double target_dist =
-              sqrt((target_x) * (target_x) + (target_y) * (target_y));
+          double target_dist = sqrt(target_x * target_x + target_y * target_y);
           double x_add_on = 0;
 
           // Fill up the rest of the path planner to always output 50 points
-          for (int i = 1; i <= 50 - previous_path_x.size(); i++) {
+          for (int i = 1; i < 50 - prev_size; i++) {
+            rev_vel += speed_diff;
+            if (rev_vel > MAX_VELOCITY) {
+              rev_vel = MAX_VELOCITY;
+            } else if (rev_vel < MAX_ACCEL) {
+              rev_vel = MAX_ACCEL;
+            }
 
-						// Gavin TODO: Consider changing the ref_vel here...
-            double N = (target_dist / (.02 * ref_vel / 2.24));
-            double x_point = x_add_on + (target_x) / N;
+            double N = target_dist / (0.02 * rev_vel / 2.24);
+            double x_point = x_add_on + target_x / N;
             double y_point = s(x_point);
 
             x_add_on = x_point;
@@ -430,8 +485,8 @@ int main() {
             double y_ref = y_point;
 
             // Rotate back to normal after rotating it earlier
-            x_point = (x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw));
-            y_point = (x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw));
+            x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
+            y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
 
             x_point += ref_x;
             y_point += ref_y;
