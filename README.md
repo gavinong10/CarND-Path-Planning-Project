@@ -1,5 +1,55 @@
 # CarND-Path-Planning-Project
 Self-Driving Car Engineer Nanodegree Program
+
+## Project Write-up
+
+### Criteria: The car is able to drive at least 4.32 miles without incident.
+A YouTube video of the car driving over 5 miles without incident is provided [here](https://youtu.be/UvFJizw7EBk).
+
+<a href="http://www.youtube.com/watch?feature=player_embedded&v=UvFJizw7EBk
+" target="_blank"><img src="http://img.youtube.com/vi/UvFJizw7EBk/0.jpg" 
+alt="Path Planning Video for Gavin Ong" width="240" height="180" border="10" /></a>
+
+### Criteria: The car drives according to the speed limit
+In the video, it can be seen that the car attempts to maintain 49 mph where possible. It will slow down if a car is in front and in its lane, and whenever possible change lanes (if the lane next to it does not have a car within 30 m in front and behind it).
+
+### Criteria: Max Acceleration and Jerk are not Exceeded
+MAX_ACCEL was set to 0.224 mph. The acceleration figure is used to set a new 'target speed' of a planning session. Assuming we achieve this 'target speed', we then ensure that we achieve our target distance in approximately 0.02 seconds. Acceleration is handled by the framework to evenly apply it; hence, we get 0.224 / 0.02 / 2.24 which is approximately 10 m/s^3 of jerk.
+
+### Criteria: Car does not have collisions
+Passed as per video.
+
+### Criteria: The car stays in its lane, except for the time between changing lanes
+Passed as per video.
+
+### Criteria: The car is able to change lanes
+Passed as per video. It achieves this if it finds a car in front of it < 30m away and there is a gap either to the left or right of it.
+
+### Criteria: There is a reflection on how to generate paths
+Firstly, for the car to move, it needed waypoints generated that were spaced at intervals specified such that if it traversed the distances between them, the velocity calculated would be distance / time=0.02 seconds. Originally starting with the map waypoints, these were sampled at 30m, 60m and 90m to create points that could be fit with a spline for smoothness. Then, assuming a particular velocity and a trigonometric approximation of distance for the spline, we determine the position and how many points we need to project out to achieve our 50 point horizon. We do this by roughly estimating a point on the spline 30 m in front of the car, determine its trigonometric distance, then approximate how far each waypoint needs to be spaced if we were travelling at some target velocity. Once we determine these waypoints, we append these to an array of x and y values that get used by the simulator.
+
+One particular important detail was that in the spline fitting process, we centered the car at (0, 0) using transformations and had the car's initial orientation be parallel to the x axis. This is to simplify fitting splines and was retransformed back to map coordinates at the end of the process.
+
+To deal with jerk, acceleration and lane changing - the initial car velocity was set to zero, and on each update cycle, the target velocity was changed by +- 0.224. It accelerated if it was not yet reaching the target velocity, and decelerated if a car was in front and less than 30 m.
+
+By checking for the presence of a car in front, we created a logical state in which it is viable to look for changing lanes. Hence, when the car was looking to potentially slow down, it observed if adjacent lanes had cars within 30 m of it. If not, it would change into the adjacent lane. 
+
+Lane changes would also occur if the car was not in the middle lane if it was not penalized by speed to do so.
+
+Conceptually, we have a poor man's discrete cost function which adheres to the following relationship of increasing cost:
+
+* If in lane 1, stay in lane if no other car is in front (30m)
+* If car is in front and car is not in adjacent lane, change lane
+* If not in lane 1 and it is possible to change lanes, change to lane 1
+
+We do not do any prediction of obstacles on the road for this project. We assume that the other cars on the road will be relatively well-behaved in speed and acceleration, such that they will NOT
+
+* Collide with us if they are adjacent to us
+* If they are within 30 m of us and in our lane, they will not drastically change behavior that they themselves will yield high jerk
+
+## END
+
+## Project Readme
    
 ### Simulator.
 You can download the Term3 Simulator which contains the Path Planning Project from the [releases tab (https://github.com/udacity/self-driving-car-sim/releases/tag/T3_v1.2).
